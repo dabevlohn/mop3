@@ -121,7 +121,7 @@ impl super::SocialNetworkApi for MastodonClient {
             .send()
             .await
             .map_err(|e| {
-                error!("Failed to fetch timeline: {}", e);
+                error!("Failed to fetch timeline 1: {}", e);
                 if e.is_timeout() {
                     AppError::Timeout
                 } else {
@@ -131,12 +131,18 @@ impl super::SocialNetworkApi for MastodonClient {
 
         if !response.status().is_success() {
             error!("API returned status: {}", response.status());
-            return Err(AppError::ApiError("Failed to fetch timeline".to_string()));
+            return Err(AppError::ApiError("Failed to fetch timeline 2".to_string()));
         }
 
-        let timeline: Vec<MastodonStatus> = response.json().await.map_err(|e| {
-            error!("Failed to parse timeline JSON: {}", e);
+        let json: String = response.text().await.map_err(|e| {
+            error!("Failed to get timeline JSON: {}", e);
             AppError::NetworkError(e)
+        })?;
+
+        debug!("Timeline JSON: {:?}", &json);
+        let timeline: Vec<MastodonStatus> = serde_json::from_str(&json).map_err(|e| {
+            error!("Failed to parse timeline JSON: {}", e);
+            AppError::JsonError(e)
         })?;
 
         info!("Fetched {} posts from Mastodon timeline", timeline.len());

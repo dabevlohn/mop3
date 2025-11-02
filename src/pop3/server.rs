@@ -87,7 +87,7 @@ async fn handle_pop3_connection(
                     handle_pop3_commands(&mut stream, &emails, &post_size).await?;
                 }
                 Err(e) => {
-                    error!("Failed to get timeline: {}", e);
+                    error!("Failed to get timeline 0: {}", e);
                     stream
                         .write_all(b"-ERR Failed to fetch messages\r\n")
                         .await?;
@@ -156,9 +156,9 @@ async fn convert_mastodon_post_to_email(
 
     // Определяем тему письма
     let subject = if post.reblog.is_some() {
-        format!("Boost from {}", post.account.display_name)
+        format!("mop3 Boost from {}", post.account.display_name)
     } else {
-        "Post".to_string()
+        "mop3 Post".to_string()
     };
 
     // Парсим дату
@@ -166,11 +166,8 @@ async fn convert_mastodon_post_to_email(
 
     // Создаём сообщение
     let mut message = MessageBuilder::new()
-        .from((
-            post.account.display_name.clone(),
-            format!("{}", post.account.acct),
-        ))
-        .to(format!("{}", &account_addr))
+        .from((post.account.display_name.clone(), post.account.acct.clone()))
+        .to(account_addr)
         .subject(subject)
         .date(created_at)
         .message_id(format!("{}@{}", post.id, account_addr));
@@ -183,11 +180,11 @@ async fn convert_mastodon_post_to_email(
     }
 
     // Добавляем ссылку на оригинальный пост если нужно
-    if config.url {
-        let url_text = format!("\n\n---\nOriginal: {}", post.url);
-        // Добавляем в подпись
-        message = message.text_body(format!("{}{}", content, url_text));
-    }
+    //if config.url {
+    //    let url_text = format!("\n\n---\nOriginal: {}", post.url);
+    //    // Добавляем в подпись
+    //    message = message.text_body(format!("{}{}", content, url_text));
+    //}
 
     // Добавляем reply if header если это ответ
     if let Some(reply_id) = &post.in_reply_to_id {
@@ -250,8 +247,7 @@ fn html_to_text(html: &str) -> String {
     let text = re.replace_all(html, "").to_string();
 
     // Декодируем HTML entities
-    let text = text
-        .replace("&lt;", "<")
+    text.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
         .replace("&quot;", "\"")
@@ -261,9 +257,7 @@ fn html_to_text(html: &str) -> String {
         .replace("<br/>", "\n")
         .replace("<br />", "\n")
         .replace("<p>", "")
-        .replace("</p>", "\n");
-
-    text
+        .replace("</p>", "\n")
 }
 
 /// Применяет proxy к ссылкам в тексте

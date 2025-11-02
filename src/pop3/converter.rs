@@ -78,9 +78,9 @@ pub async fn convert_mastodon_post_to_email(
     }
 
     // Добавляем ссылку на оригинальный пост в конец если нужно
-    if config.url {
-        content = format!("{}\n\n---\nOriginal: {}", content, post_url);
-    }
+    //if config.url {
+    //    content = format!("{}\n\n---\nOriginal: {}", content, post_url);
+    //}
 
     // Создаём сообщение
     let account = &post.account;

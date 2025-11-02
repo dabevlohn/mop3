@@ -15,7 +15,7 @@ pub struct Status {
     pub media_ids: Vec<String>,
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MastodonAccount {
     pub display_name: String,
     pub username: String,
@@ -35,16 +35,15 @@ pub struct Attachment {
     pub data: Vec<u8>,
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MastodonStatus {
     pub id: String,
     pub content: String,
     pub created_at: String,
-    pub url: String,
+    pub url: Option<String>,
     pub reblog: Option<Box<MastodonStatus>>,
     pub in_reply_to_id: Option<String>,
     pub media_attachments: Vec<serde_json::Value>,
-    #[serde(default)]
     pub account: MastodonAccount,
 }
 
