@@ -1,27 +1,36 @@
+use crate::api;
 use crate::config::Config;
 use crate::error::AppResult;
-use crate::models::Credentials;
-use crate::api;
+use crate::models::{Credentials, Email, Post};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use deunicode::deunicode;
+use fancy_regex::Regex;
+use mail_builder::MessageBuilder;
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{error, info, warn, debug};
+use tokio::net::{TcpListener, TcpStream};
+use tracing::{debug, error, info, warn};
+
+const POP3_BANNER: &[u8] = b"+OK MOP3 ready\r\n";
+const POP3_OK_MESSAGES_FETCHED: &[u8] = b"+OK MOP3 READY, MESSAGES FETCHED\r\n";
 
 pub async fn run_pop3_server(config: Arc<Config>) -> AppResult<()> {
     let bind_addr = format!("{}:{}", config.address, config.pop3port);
-    
+
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("POP3 server listening on: {}", bind_addr);
+
+    let recent_id = String::new();
 
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
                 debug!("New POP3 connection from: {}", peer_addr);
                 let config = Arc::clone(&config);
-                
-                // Каждое соединение обрабатывается в отдельной задаче
+                let recent = recent_id.clone();
+
                 tokio::spawn(async move {
-                    if let Err(e) = handle_pop3_connection(stream, config).await {
+                    if let Err(e) = handle_pop3_connection(stream, config, recent).await {
                         warn!("POP3 connection error from {}: {}", peer_addr, e);
                     }
                 });
@@ -36,12 +45,13 @@ pub async fn run_pop3_server(config: Arc<Config>) -> AppResult<()> {
 async fn handle_pop3_connection(
     mut stream: TcpStream,
     config: Arc<Config>,
+    _recent_id: String,
 ) -> AppResult<()> {
-    stream.write_all(b"+OK MOP3 ready\r\n").await?;
+    stream.write_all(POP3_BANNER).await?;
 
     // Получаем учётные данные
     let cred = get_pop3_login(&mut stream).await?;
-    
+
     // Берём аккаунт и токен из конфига или из логина
     let mut final_cred = cred;
     if let Some(account) = &config.account {
@@ -59,11 +69,30 @@ async fn handle_pop3_connection(
     // АСИНХРОННО проверяем учётные данные
     match api_client.verify_credentials(&final_cred).await {
         Ok(account_addr) => {
-            stream.write_all(b"+OK MOP3 READY, MESSAGES FETCHED\r\n").await?;
-            debug!("Verified account: {}", account_addr);
+            info!("Verified account: {}", account_addr);
 
-            // Обрабатываем команды
-            handle_pop3_commands(&mut stream, &api_client, &final_cred).await?;
+            // Получаем ленту постов
+            match api_client.get_timeline(&final_cred, 40, "").await {
+                Ok(posts) => {
+                    debug!("Fetched {} posts from timeline", posts.len());
+
+                    // Конвертируем посты в письма
+                    let emails = convert_posts_to_emails(posts, &account_addr, &config).await?;
+
+                    let post_size: usize = emails.iter().map(|e| e.len()).sum();
+
+                    stream.write_all(POP3_OK_MESSAGES_FETCHED).await?;
+
+                    // Обрабатываем команды от клиента
+                    handle_pop3_commands(&mut stream, &emails, &post_size).await?;
+                }
+                Err(e) => {
+                    error!("Failed to get timeline: {}", e);
+                    stream
+                        .write_all(b"-ERR Failed to fetch messages\r\n")
+                        .await?;
+                }
+            }
         }
         Err(e) => {
             error!("Failed to verify credentials: {}", e);
@@ -72,6 +101,192 @@ async fn handle_pop3_connection(
     }
 
     Ok(())
+}
+
+/// Конвертирует посты Mastodon/Bluesky в RFC822 письма
+async fn convert_posts_to_emails(
+    posts: Vec<Post>,
+    account_addr: &str,
+    config: &Arc<Config>,
+) -> AppResult<Vec<String>> {
+    let mut emails = Vec::new();
+    let domain = account_addr.split('@').last().unwrap_or("mastodon.local");
+
+    for post in posts {
+        match post {
+            Post::Mastodon(mastodon_post) => {
+                if let Ok(email) =
+                    convert_mastodon_post_to_email(&mastodon_post, domain, config).await
+                {
+                    emails.push(email);
+                }
+            }
+            Post::Bluesky(_bluesky_post) => {
+                debug!("Bluesky post conversion not fully implemented yet");
+            }
+        }
+    }
+
+    Ok(emails)
+}
+
+/// Конвертирует один пост Mastodon в RFC822 письмо
+async fn convert_mastodon_post_to_email(
+    post: &crate::models::MastodonStatus,
+    domain: &str,
+    config: &Arc<Config>,
+) -> AppResult<String> {
+    // Получаем контент
+    let mut content = post.content.clone();
+
+    // Удаляем HTML теги если нужно конвертировать в текст
+    if !config.html {
+        content = html_to_text(&content);
+    }
+
+    // Применяем ASCII преобразование если нужно
+    if config.ascii {
+        content = deunicode(&content);
+    }
+
+    // Применяем proxy для ссылок если нужно
+    if let Some(proxy) = &config.proxy {
+        content = apply_proxy_to_links(&content, proxy);
+    }
+
+    // Определяем тему письма
+    let subject = if post.reblog.is_some() {
+        format!("Boost from {}", post.account.display_name)
+    } else {
+        "Post".to_string()
+    };
+
+    // Парсим дату
+    let created_at = parse_timestamp(&post.created_at);
+
+    // Создаём сообщение
+    let mut message = MessageBuilder::new()
+        .from((
+            post.account.display_name.clone(),
+            format!("{}@{}", post.account.username, domain),
+        ))
+        .to(format!("{}@{}", post.account.username, domain))
+        .subject(subject)
+        .date(created_at)
+        .message_id(format!("{}@{}", post.id, domain));
+
+    // Добавляем тело
+    if config.html {
+        message = message.html_body(&content);
+    } else {
+        message = message.text_body(&content);
+    }
+
+    // Добавляем ссылку на оригинальный пост если нужно
+    if config.url {
+        let url_text = format!("\n\n---\nOriginal: {}", post.url);
+        // Добавляем в подпись
+        message = message.text_body(format!("{}{}", content, url_text));
+    }
+
+    // Добавляем reply if header если это ответ
+    if let Some(reply_id) = &post.in_reply_to_id {
+        message = message.in_reply_to(format!("{}@{}", reply_id, domain));
+    }
+
+    // Обрабатываем медиа вложения
+    for attachment in &post.media_attachments {
+        let url = attachment.get("url").and_then(|v| v.as_str());
+
+        if let Some(url) = url {
+            // Загружаем медиа
+            if config.attachment || config.inline {
+                if let Ok(data) = download_media(url).await {
+                    let media_type = attachment
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/jpeg");
+
+                    let filename = attachment
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image.jpg");
+
+                    if config.attachment {
+                        message = message.attachment(media_type, filename, data);
+                    } else if config.inline {
+                        message = message.inline(media_type, filename, data);
+                    }
+                }
+            }
+        }
+    }
+
+    // Сериализуем в RFC822
+    let email_string = message
+        .write_to_string()
+        .map_err(|e| format!("Failed to build email: {}", e))?;
+
+    Ok(email_string)
+}
+
+/// Загружает медиа файл по URL
+async fn download_media(url: &str) -> AppResult<Vec<u8>> {
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to download media: {}", response.status()).into());
+    }
+
+    let data = response.bytes().await?;
+    Ok(data.to_vec())
+}
+
+/// Конвертирует HTML в обычный текст
+fn html_to_text(html: &str) -> String {
+    // Простое удаление HTML тегов
+    let re = Regex::new(r"<[^>]*>").unwrap();
+    let text = re.replace_all(html, "").to_string();
+
+    // Декодируем HTML entities
+    let text = text
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#39;", "'")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("<p>", "")
+        .replace("</p>", "\n");
+
+    text
+}
+
+/// Применяет proxy к ссылкам в тексте
+fn apply_proxy_to_links(content: &str, proxy: &str) -> String {
+    // Найти и заменить HTTP ссылки
+    match Regex::new(r"https?://[^\s\]<>]+") {
+        Ok(re) => re
+            .replace_all(content, |caps: &fancy_regex::Captures| {
+                let url = &caps[0];
+                format!("{}{}", proxy, url)
+            })
+            .to_string(),
+        Err(_) => content.to_string(),
+    }
+}
+
+/// Парсит дату Mastodon в Unix timestamp
+fn parse_timestamp(date_str: &str) -> i64 {
+    if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.3fZ") {
+        DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc).timestamp()
+    } else {
+        0
+    }
 }
 
 async fn get_pop3_login(stream: &mut TcpStream) -> AppResult<Credentials> {
@@ -83,7 +298,7 @@ async fn get_pop3_login(stream: &mut TcpStream) -> AppResult<Credentials> {
     loop {
         let mut buf = vec![0u8; 1024];
         let n = stream.read(&mut buf).await?;
-        
+
         if n == 0 {
             return Err("Connection closed".into());
         }
@@ -119,14 +334,14 @@ async fn get_pop3_login(stream: &mut TcpStream) -> AppResult<Credentials> {
 
 async fn handle_pop3_commands(
     stream: &mut TcpStream,
-    api_client: &Box<dyn api::SocialNetworkApi>,
-    cred: &Credentials,
+    emails: &[String],
+    post_size: &usize,
 ) -> AppResult<()> {
     let mut buf = vec![0u8; 1024];
 
     loop {
         let n = stream.read(&mut buf).await?;
-        
+
         if n == 0 {
             break;
         }
@@ -136,45 +351,138 @@ async fn handle_pop3_commands(
 
         match parts.next() {
             Some("STAT") => {
-                // АСИНХРОННО получаем timeline
-                match api_client.get_timeline(cred, 20, "").await {
-                    Ok(posts) => {
-                        let count = posts.len();
-                        let response = format!("+OK {} 0\r\n", count);
-                        stream.write_all(response.as_bytes()).await?;
-                    }
-                    Err(e) => {
-                        error!("Failed to get timeline: {}", e);
-                        stream.write_all(b"-ERR Failed to fetch messages\r\n").await?;
-                    }
-                }
+                let response = format!("+OK {} {}\r\n", emails.len(), post_size);
+                stream.write_all(response.as_bytes()).await?;
             }
             Some("LIST") => {
-                // АСИНХРОННО получаем timeline для списка
-                match api_client.get_timeline(cred, 20, "").await {
-                    Ok(posts) => {
-                        stream.write_all(b"+OK\r\n").await?;
-                        for (idx, _post) in posts.iter().enumerate() {
-                            let line = format!("{} 1000\r\n", idx + 1);
-                            stream.write_all(line.as_bytes()).await?;
+                if let Some(index_str) = parts.next() {
+                    if let Ok(index) = index_str.parse::<usize>() {
+                        if index > 0 && index <= emails.len() {
+                            let response = format!("+OK {} {}\r\n", index, emails[index - 1].len());
+                            stream.write_all(response.as_bytes()).await?;
+                        } else {
+                            stream.write_all(b"-ERR no such message\r\n").await?;
                         }
-                        stream.write_all(b".\r\n").await?;
+                    } else {
+                        stream.write_all(b"-ERR invalid message number\r\n").await?;
                     }
-                    Err(e) => {
-                        error!("Failed to get timeline: {}", e);
-                        stream.write_all(b"-ERR Failed to list messages\r\n").await?;
+                } else {
+                    // LIST без параметра - выводим список всех
+                    stream
+                        .write_all(format!("+OK {} messages\r\n", emails.len()).as_bytes())
+                        .await?;
+                    for (i, email) in emails.iter().enumerate() {
+                        stream
+                            .write_all(format!("{} {}\r\n", i + 1, email.len()).as_bytes())
+                            .await?;
                     }
+                    stream.write_all(b".\r\n").await?;
                 }
+            }
+            Some("RETR") => {
+                if let Some(index_str) = parts.next() {
+                    if let Ok(index) = index_str.parse::<usize>() {
+                        if index > 0 && index <= emails.len() {
+                            let email = &emails[index - 1];
+                            stream
+                                .write_all(format!("+OK {} octets\r\n", email.len()).as_bytes())
+                                .await?;
+                            stream.write_all(email.as_bytes()).await?;
+                            stream.write_all(b"\r\n.\r\n").await?;
+                        } else {
+                            stream.write_all(b"-ERR no such message\r\n").await?;
+                        }
+                    } else {
+                        stream.write_all(b"-ERR invalid message number\r\n").await?;
+                    }
+                } else {
+                    stream.write_all(b"-ERR no message specified\r\n").await?;
+                }
+            }
+            Some("DELE") => {
+                // Мы не удаляем письма, просто отправляем OK
+                stream.write_all(b"+OK\r\n").await?;
             }
             Some("QUIT") => {
                 stream.write_all(b"+OK bye\r\n").await?;
                 break;
             }
             Some("CAPA") => {
-                stream.write_all(b"+OK Capability list follows\r\nUSER\r\nTOP\r\nUIDL\r\n.\r\n").await?;
+                stream
+                    .write_all(b"+OK Capability list follows\r\nUSER\r\nTOP\r\nUIDL\r\n.\r\n")
+                    .await?;
             }
             Some("NOOP") => {
                 stream.write_all(b"+OK\r\n").await?;
+            }
+            Some("RSET") => {
+                stream.write_all(b"+OK\r\n").await?;
+            }
+            Some("TOP") => {
+                if let (Some(msg_str), Some(lines_str)) = (parts.next(), parts.next()) {
+                    if let (Ok(msg), Ok(lines)) =
+                        (msg_str.parse::<usize>(), lines_str.parse::<usize>())
+                    {
+                        if msg > 0 && msg <= emails.len() {
+                            let email = &emails[msg - 1];
+                            let mut line_count = 0;
+                            let mut output = String::new();
+                            let mut in_body = false;
+
+                            for line in email.lines() {
+                                if line.is_empty() {
+                                    in_body = true;
+                                }
+
+                                if in_body {
+                                    if line_count >= lines {
+                                        break;
+                                    }
+                                    line_count += 1;
+                                }
+
+                                output.push_str(line);
+                                output.push_str("\r\n");
+                            }
+
+                            stream
+                                .write_all(format!("+OK {} octets\r\n", output.len()).as_bytes())
+                                .await?;
+                            stream.write_all(output.as_bytes()).await?;
+                            stream.write_all(b".\r\n").await?;
+                        } else {
+                            stream.write_all(b"-ERR no such message\r\n").await?;
+                        }
+                    } else {
+                        stream.write_all(b"-ERR invalid parameters\r\n").await?;
+                    }
+                } else {
+                    stream.write_all(b"-ERR missing parameters\r\n").await?;
+                }
+            }
+            Some("UIDL") => {
+                if let Some(index_str) = parts.next() {
+                    if let Ok(index) = index_str.parse::<usize>() {
+                        if index > 0 && index <= emails.len() {
+                            stream
+                                .write_all(format!("+OK {} msg-{}\r\n", index, index).as_bytes())
+                                .await?;
+                        } else {
+                            stream.write_all(b"-ERR no such message\r\n").await?;
+                        }
+                    } else {
+                        stream.write_all(b"-ERR invalid message number\r\n").await?;
+                    }
+                } else {
+                    // UIDL без параметра - выводим список всех
+                    stream.write_all(b"+OK\r\n").await?;
+                    for i in 1..=emails.len() {
+                        stream
+                            .write_all(format!("{} msg-{}\r\n", i, i).as_bytes())
+                            .await?;
+                    }
+                    stream.write_all(b".\r\n").await?;
+                }
             }
             _ => {
                 stream.write_all(b"-ERR unknown command\r\n").await?;
