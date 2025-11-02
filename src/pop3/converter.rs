@@ -131,10 +131,10 @@ pub async fn convert_mastodon_post_to_email(
                             .unwrap_or("image.jpg");
 
                         if config.attachment {
-                            message = message.attachment(media_type, filename, data);
+                            message = message.binary_attachment(media_type, filename, data);
                             debug!("Added attachment: {}", filename);
                         } else if config.inline {
-                            message = message.inline(media_type, filename, data);
+                            message = message.binary_inline(media_type, filename, data);
                             debug!("Added inline image: {}", filename);
                         }
                     }
