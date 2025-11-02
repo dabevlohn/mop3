@@ -1,7 +1,7 @@
 use crate::api;
 use crate::config::Config;
 use crate::error::AppResult;
-use crate::models::{Credentials, Email, Post};
+use crate::models::{Credentials, Post};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use deunicode::deunicode;
 use fancy_regex::Regex;
@@ -168,7 +168,7 @@ async fn convert_mastodon_post_to_email(
     let mut message = MessageBuilder::new()
         .from((
             post.account.display_name.clone(),
-            format!("{:#?}", post.account),
+            format!("{}", post.account.acct),
         ))
         .to(format!("{}", &account_addr))
         .subject(subject)
