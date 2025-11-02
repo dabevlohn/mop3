@@ -203,7 +203,7 @@ async fn convert_mastodon_post_to_email(
             if config.attachment || config.inline {
                 if let Ok(data) = download_media(url).await {
                     let media_type = attachment
-                        .get("type")
+                        .get("Content-Type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("image/jpeg");
 
