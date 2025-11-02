@@ -1,26 +1,174 @@
-# MOP3
-A Mastodon to email client Gateway
+# MOP3 - Mastodon/Bluesky to POP3/SMTP Gateway
 
-MOP3 is a toy-ish, standards complient-ish server that speaks POP3/SMTP which serves data from your home Mastodon timeline. This enables email clients from as early as the 1980s and as recent as today to receive, send, and reply to Mastodon posts (including images). This was started as a retro-computing project, however I've used it as my main client during development, as even modern email clients like Apple's Mail.app and Windows Mail support POP3 and SMTP. MOP3 can be configured to encode posts in Unicode or ASCII, with or without HTML, and images either as links, or attachments.
+## Требования
 
-<img src="screenshots/mop3-win.png" alt="Outlook Express displaying Mastodon posts" width="500"/>
-<img src="screenshots/mop3-linux.png" alt="Sylpheed on Linux" width="500"/>
+- Rust 1.70+
+- Cargo
 
-## Installation
-Binaries are available for Windows, Mac, and Linux on the releases page. This is written in Rust, so running `cargo install mop3` on your host should install it. If not, downloading the repo and running `cargo build` should also work. 
+## Установка
 
-## Usage
-This requires an access token, which can be obtained in Preferences -> Development -> New Application on your Mastodon account. The client key and secret are _not_ required.
+```bash
+git clone <repo>
+cd mop3
+cargo build --release
+```
 
-`mop3 --help` will give you all of the important runtime flags. None are required, but `--token` is reccomended to avoid sending your access token over TCP, and required for posting since SMTP authentication is not implemented. I reccomend the `--ascii` flag for retro clients, and `--html --inline` for modern clients.
+## Архитектура проекта
 
-To connect to it, point your client at the server ip/port, set the username to "username@instance.com", the password to your account token, and disable SSL/TLS/SPA/SMTP authentication. If `--token` is used, the password can be anything. Some clients will not include the domain name in the username by default, so make sure it includes both parts, and use `--account` if all else fails.
+### Структура модулей
 
-I strongly reccomend turning OFF "Include Original Message"/"Inline reply" and similar settings in your client, as it is very difficult to parse when the reply ends and the original message starts, and the parsing code will often post headers in your mastodon message by mistake.
+```text
+src/
+├── main.rs           # Точка входа, инициализация логирования
+├── config.rs         # Конфигурация из CLI и env переменных
+├── error.rs          # Система обработки ошибок
+├── models.rs         # Структуры данных
+├── api/
+│   ├── mod.rs        # Trait SocialNetworkApi и фабрика
+│   ├── mastodon.rs   # Клиент Mastodon API
+│   └── bluesky.rs    # Клиент Bluesky API
+├── pop3/
+│   ├── mod.rs
+│   └── server.rs     # Асинхронный POP3 сервер
+└── smtp/
+    ├── mod.rs
+    └── server.rs     # Асинхронный SMTP сервер
+```
 
-On the first connection, MOP3 will fetch the last 40 posts on your timeline. On every subsequent connection, it will only fetch the posts that have been uploaded since the last connection. This can't differentiate between clients, so the server will need to be restarted to refetch posts on a new client.
-<img src="screenshots/mop3-mac.png" alt="Mail.app displaying Mastodon posts" width="800"/>
+## Параметры командной строки
 
-## Disclaimer
-You run this application _at your own risk_. MOP3 is my first Rust application, and so probably contains code slightly below world class levels. It is also speaking a protocol from the 90s/70s, with no security, and little authentication. I don't reccomend running this on the internet. I also tried to be friendly with my use of the Mastodon API, but I'm not responsible for any DMs from your sysop if it does something weird. However, the code is relatively simple, it's been tested, and especially with the `--token` option, not passing around secret data, so it _should_ be perfectly safe to run on a LAN.
+```bash
+./mop3 [OPTIONS]
+```
 
+### Все параметры поддерживают env переменные
+
+| CLI флаг       | Env переменная    | По умолчанию | Описание                                   |
+| -------------- | ----------------- | ------------ | ------------------------------------------ |
+| `--account`    | `MOP3_ACCOUNT`    | -            | Аккаунт социальной сети (<user@example.com>) |
+| `--token`      | `MOP3_TOKEN`      | -            | Токен авторизации API                      |
+| `--address`    | `MOP3_ADDRESS`    | `127.0.0.1`  | IP адрес для прослушивания                 |
+| `--pop3port`   | `MOP3_POP3_PORT`  | `110`        | POP3 порт                                  |
+| `--smtp-port`  | `MOP3_SMTP_PORT`  | `25`         | SMTP порт                                  |
+| `--api-mode`   | `MOP3_API_MODE`   | `mastodon`   | API режим: `mastodon` или `bluesky`        |
+| `--nosmtp`     | `MOP3_NO_SMTP`    | false        | Отключить SMTP сервер                      |
+| `--ascii`      | `MOP3_ASCII`      | false        | Преобразовать Unicode в ASCII              |
+| `--attachment` | `MOP3_ATTACHMENT` | false        | Добавлять изображения как вложения         |
+| `--inline`     | `MOP3_INLINE`     | false        | Встраивать изображения inline              |
+| `--html`       | `MOP3_HTML`       | false        | Отправлять HTML вместо текста              |
+| `--debug`      | `MOP3_DEBUG`      | false        | Debug режим                                |
+| `--url`        | `MOP3_URL`        | false        | Включать URL оригинального поста           |
+| `--proxy`      | `MOP3_PROXY`      | -            | Прокси для ссылок                          |
+| `--log-level`  | `RUST_LOG`        | `info`       | Уровень логирования                        |
+
+## Примеры использования
+
+### 1. Запуск с параметрами командной строки (Mastodon)
+
+```bash
+./mop3 \
+  --account user@mastodon.social \
+  --token your_bearer_token \
+  --address 0.0.0.0 \
+  --pop3port 1110 \
+  --smtp-port 1025 \
+  --api-mode mastodon
+```
+
+### 2. Запуск с env переменными (Mastodon)
+
+```bash
+export MOP3_ACCOUNT=user@mastodon.social
+export MOP3_TOKEN=your_bearer_token
+export MOP3_ADDRESS=0.0.0.0
+export MOP3_POP3_PORT=1110
+export MOP3_SMTP_PORT=1025
+export MOP3_API_MODE=mastodon
+export RUST_LOG=debug
+
+./mop3
+```
+
+### 3. Запуск с Bluesky API
+
+```bash
+export MOP3_ACCOUNT=user.bsky.social
+export MOP3_TOKEN=your_bluesky_token
+export MOP3_API_MODE=bluesky
+export RUST_LOG=info
+
+./mop3
+```
+
+### 4. Запуск только POP3 (без SMTP)
+
+```bash
+./mop3 \
+  --account user@mastodon.social \
+  --token token \
+  --nosmtp \
+  --log-level debug
+```
+
+## Многопоточность
+
+Приложение использует асинхронный runtime Tokio:
+
+1. **POP3 сервер** - работает в бесконечном `loop` через `tokio::spawn`
+2. **SMTP сервер** - работает в отдельной задаче через `tokio::spawn`
+3. **Каждое соединение** - обрабатывается в отдельной async задаче
+4. **HTTP запросы** - не блокируют, имеют timeout 30 секунд
+
+### Преимущества
+
+- ✅ Нет паники при timeout API
+- ✅ Сервер всегда доступен
+- ✅ Высокая пропускная способность
+- ✅ Минимальное использование памяти
+
+## API режимы
+
+### Mastodon API
+
+- Полная поддержка получения ленты
+- Отправка постов
+- Загрузка медиа (изображения, видео)
+- Поддержка ответов на посты
+
+```bash
+export MOP3_API_MODE=mastodon
+export MOP3_ACCOUNT=user@mastodon.social
+export MOP3_TOKEN=your_mastodon_token
+
+./mop3
+```
+
+### Bluesky API
+
+- Базовая аутентификация
+- Скелет для расширения функциональности
+
+```bash
+export MOP3_API_MODE=bluesky
+export MOP3_ACCOUNT=user.bsky.social
+export MOP3_TOKEN=your_bluesky_token
+
+./mop3
+```
+
+## Планы развития
+
+- [ ] Полная реализация Bluesky API
+- [ ] Кэширование ленты
+- [ ] WebSocket поддержка
+- [ ] Metrics и мониторинг
+- [ ] OAuth2 для веб-клиентов
+- [ ] Поддержка других социальных сетей
+
+## Лицензия
+
+MIT
+
+## Контакты
+
+Проект инициирован Nathan Kiesman [https://github.com/miakizz/mop3](https://github.com/miakizz/mop3)
