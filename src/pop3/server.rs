@@ -110,13 +110,13 @@ async fn convert_posts_to_emails(
     config: &Arc<Config>,
 ) -> AppResult<Vec<String>> {
     let mut emails = Vec::new();
-    let domain = account_addr.split('@').last().unwrap_or("mastodon.local");
+    //let domain = account_addr.split('@').last().unwrap_or("mastodon.local");
 
     for post in posts {
         match post {
             Post::Mastodon(mastodon_post) => {
                 if let Ok(email) =
-                    convert_mastodon_post_to_email(&mastodon_post, domain, config).await
+                    convert_mastodon_post_to_email(&mastodon_post, account_addr, config).await
                 {
                     emails.push(email);
                 }
@@ -133,7 +133,7 @@ async fn convert_posts_to_emails(
 /// Конвертирует один пост Mastodon в RFC822 письмо
 async fn convert_mastodon_post_to_email(
     post: &crate::models::MastodonStatus,
-    domain: &str,
+    account_addr: &str,
     config: &Arc<Config>,
 ) -> AppResult<String> {
     // Получаем контент
@@ -168,12 +168,12 @@ async fn convert_mastodon_post_to_email(
     let mut message = MessageBuilder::new()
         .from((
             post.account.display_name.clone(),
-            format!("{}@{}", post.account.username, domain),
+            format!("{}@{}", post.account.username, account_addr),
         ))
-        .to(format!("{}@{}", post.account.username, domain))
+        .to(format!("{}@{}", post.account.username, account_addr))
         .subject(subject)
         .date(created_at)
-        .message_id(format!("{}@{}", post.id, domain));
+        .message_id(format!("{}@{}", post.id, account_addr));
 
     // Добавляем тело
     if config.html {
@@ -191,7 +191,7 @@ async fn convert_mastodon_post_to_email(
 
     // Добавляем reply if header если это ответ
     if let Some(reply_id) = &post.in_reply_to_id {
-        message = message.in_reply_to(format!("{}@{}", reply_id, domain));
+        message = message.in_reply_to(format!("{}@{}", reply_id, account_addr));
     }
 
     // Обрабатываем медиа вложения
