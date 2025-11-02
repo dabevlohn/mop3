@@ -10,6 +10,7 @@ use tracing::{debug, error, info};
 const USER_AGENT: &str = "mop3/0.2";
 const TIMEOUT_SECS: u64 = 30;
 
+#[derive(Default)]
 pub struct MastodonClient {
     http_client: Client,
     config: Config,
@@ -74,7 +75,10 @@ impl super::SocialNetworkApi for MastodonClient {
             })?;
 
         if !response.status().is_success() {
-            error!("Invalid credentials for Mastodon account: {}", cred.username);
+            error!(
+                "Invalid credentials for Mastodon account: {}",
+                cred.username
+            );
             return Err(AppError::InvalidCredentials);
         }
 
@@ -83,11 +87,19 @@ impl super::SocialNetworkApi for MastodonClient {
             AppError::ApiError("Cannot parse account".to_string())
         })?;
 
-        info!("Successfully verified Mastodon account: {}", account.username);
+        info!(
+            "Successfully verified Mastodon account: {}",
+            account.username
+        );
         Ok(format!("{}@{}", account.username, domain))
     }
 
-    async fn get_timeline(&self, cred: &Credentials, limit: u32, since_id: &str) -> AppResult<Vec<Post>> {
+    async fn get_timeline(
+        &self,
+        cred: &Credentials,
+        limit: u32,
+        since_id: &str,
+    ) -> AppResult<Vec<Post>> {
         let (_, url) = Self::parse_account(&cred.username)?;
         let since_query = if !since_id.is_empty() {
             format!("&since_id={}", since_id)
@@ -96,7 +108,7 @@ impl super::SocialNetworkApi for MastodonClient {
         };
 
         let endpoint = format!(
-            "{}/api/v1/timelines/home?limit={}{}", 
+            "{}/api/v1/timelines/home?limit={}{}",
             url, limit, since_query
         );
 
@@ -124,7 +136,7 @@ impl super::SocialNetworkApi for MastodonClient {
 
         let timeline: Vec<MastodonStatus> = response.json().await.map_err(|e| {
             error!("Failed to parse timeline JSON: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         info!("Fetched {} posts from Mastodon timeline", timeline.len());
@@ -188,7 +200,7 @@ impl super::SocialNetworkApi for MastodonClient {
 
         let result: Value = response.json().await.map_err(|e| {
             error!("Failed to parse post response: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         let post_id = result["id"]
@@ -200,7 +212,13 @@ impl super::SocialNetworkApi for MastodonClient {
         Ok(post_id)
     }
 
-    async fn upload_media(&self, cred: &Credentials, data: Vec<u8>, filename: String, mime: String) -> AppResult<String> {
+    async fn upload_media(
+        &self,
+        cred: &Credentials,
+        data: Vec<u8>,
+        filename: String,
+        mime: String,
+    ) -> AppResult<String> {
         let (_, url) = Self::parse_account(&cred.username)?;
 
         debug!("Uploading media: {} ({})", filename, mime);
@@ -235,7 +253,7 @@ impl super::SocialNetworkApi for MastodonClient {
 
         let result: Value = response.json().await.map_err(|e| {
             error!("Failed to parse upload response: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         let media_id = result["id"]

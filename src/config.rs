@@ -1,15 +1,16 @@
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, ValueEnum)]
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, ValueEnum)]
 pub enum ApiMode {
+    #[default]
     #[value(name = "mastodon")]
     Mastodon,
     #[value(name = "bluesky")]
     Bluesky,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Default, Parser, Debug, Clone)]
 #[command(name = "MOP3")]
 #[command(author = "Dabe Vlohn")]
 #[command(version = "0.2.0")]

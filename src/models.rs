@@ -15,7 +15,7 @@ pub struct Status {
     pub media_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 pub struct MastodonAccount {
     pub display_name: String,
     pub username: String,
@@ -35,7 +35,7 @@ pub struct Attachment {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 pub struct MastodonStatus {
     pub id: String,
     pub content: String,

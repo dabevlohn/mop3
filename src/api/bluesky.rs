@@ -36,7 +36,10 @@ impl BlueskyClient {
 
         let response = self
             .http_client
-            .post(format!("{}/com.atproto.server.createSession", BLUESKY_API_URL))
+            .post(format!(
+                "{}/com.atproto.server.createSession",
+                BLUESKY_API_URL
+            ))
             .json(&serde_json::json!({
                 "identifier": &cred.username,
                 "password": &cred.password,
@@ -59,12 +62,14 @@ impl BlueskyClient {
 
         let session: Value = response.json().await.map_err(|e| {
             error!("Failed to parse session response: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         let access_token = session["accessJwt"]
             .as_str()
-            .ok_or(AppError::ApiError("No access token in response".to_string()))?
+            .ok_or(AppError::ApiError(
+                "No access token in response".to_string(),
+            ))?
             .to_string();
 
         Ok(access_token)
@@ -83,7 +88,12 @@ impl super::SocialNetworkApi for BlueskyClient {
         Ok(cred.username.clone())
     }
 
-    async fn get_timeline(&self, cred: &Credentials, limit: u32, since_id: &str) -> AppResult<Vec<Post>> {
+    async fn get_timeline(
+        &self,
+        cred: &Credentials,
+        limit: u32,
+        since_id: &str,
+    ) -> AppResult<Vec<Post>> {
         debug!("Fetching Bluesky timeline (limit: {})", limit);
 
         // Получаем access token
@@ -113,13 +123,13 @@ impl super::SocialNetworkApi for BlueskyClient {
 
         let data: Value = response.json().await.map_err(|e| {
             error!("Failed to parse timeline JSON: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         // TODO: Парсить посты в Vec<Post::Bluesky>
         // Пока возвращаем пустой вектор
         warn!("Bluesky timeline parsing not fully implemented yet");
-        
+
         info!("Fetched Bluesky timeline successfully");
         Ok(vec![])
     }
@@ -172,13 +182,16 @@ impl super::SocialNetworkApi for BlueskyClient {
             })?;
 
         if !response.status().is_success() {
-            error!("Bluesky API returned status: {} for post", response.status());
+            error!(
+                "Bluesky API returned status: {} for post",
+                response.status()
+            );
             return Err(AppError::ApiError("Failed to post".to_string()));
         }
 
         let result: Value = response.json().await.map_err(|e| {
             error!("Failed to parse post response: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         let uri = result["uri"]
@@ -190,7 +203,13 @@ impl super::SocialNetworkApi for BlueskyClient {
         Ok(uri)
     }
 
-    async fn upload_media(&self, cred: &Credentials, data: Vec<u8>, filename: String, mime: String) -> AppResult<String> {
+    async fn upload_media(
+        &self,
+        cred: &Credentials,
+        data: Vec<u8>,
+        filename: String,
+        mime: String,
+    ) -> AppResult<String> {
         debug!("Uploading media to Bluesky: {} ({})", filename, mime);
 
         // Получаем access token
@@ -221,12 +240,14 @@ impl super::SocialNetworkApi for BlueskyClient {
 
         let result: Value = response.json().await.map_err(|e| {
             error!("Failed to parse upload response: {}", e);
-            AppError::JsonError(e)
+            AppError::NetworkError(e)
         })?;
 
         let blob_ref = result["blob"]["ref"]["$link"]
             .as_str()
-            .ok_or(AppError::ApiError("No blob reference in response".to_string()))?
+            .ok_or(AppError::ApiError(
+                "No blob reference in response".to_string(),
+            ))?
             .to_string();
 
         info!("Successfully uploaded media to Bluesky: {}", blob_ref);
