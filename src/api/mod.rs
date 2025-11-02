@@ -4,17 +4,19 @@ pub mod bluesky;
 use crate::config::{Config, ApiMode};
 use crate::models::Credentials;
 use crate::error::AppResult;
+use async_trait::async_trait;
 
-/// Абстрактный интерфейс к социальным сетям
+/// Абстрактный интерфейс к социальным сетям (полностью асинхронный)
+#[async_trait]
 pub trait SocialNetworkApi: Send + Sync {
     /// Проверяет учётные данные и получает информацию о пользователе
-    fn verify_credentials(&self, cred: &Credentials) -> AppResult<String>;
+    async fn verify_credentials(&self, cred: &Credentials) -> AppResult<String>;
     
     /// Получает ленту постов
-    fn get_timeline(&self, cred: &Credentials, limit: u32, since_id: &str) -> AppResult<Vec<crate::models::Post>>;
+    async fn get_timeline(&self, cred: &Credentials, limit: u32, since_id: &str) -> AppResult<Vec<crate::models::Post>>;
     
     /// Отправляет новый пост
-    fn post_status(
+    async fn post_status(
         &self,
         cred: &Credentials,
         status: String,
@@ -23,7 +25,7 @@ pub trait SocialNetworkApi: Send + Sync {
     ) -> AppResult<String>;
     
     /// Загружает медиа файл
-    fn upload_media(&self, cred: &Credentials, data: Vec<u8>, filename: String, mime: String) -> AppResult<String>;
+    async fn upload_media(&self, cred: &Credentials, data: Vec<u8>, filename: String, mime: String) -> AppResult<String>;
 }
 
 /// Фабрика для создания API клиента на основе конфигурации

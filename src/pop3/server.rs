@@ -56,15 +56,14 @@ async fn handle_pop3_connection(
     // Создаём API клиент
     let api_client = api::create_api_client(&config)?;
 
-    // Проверяем учётные данные
-    match api_client.verify_credentials(&final_cred) {
+    // АСИНХРОННО проверяем учётные данные
+    match api_client.verify_credentials(&final_cred).await {
         Ok(account_addr) => {
             stream.write_all(b"+OK MOP3 READY, MESSAGES FETCHED\r\n").await?;
             debug!("Verified account: {}", account_addr);
 
-            // TODO: Получить ленту и отправить письма
-            // Пока просто ждём команд от клиента
-            handle_pop3_commands(&mut stream).await?;
+            // Обрабатываем команды
+            handle_pop3_commands(&mut stream, &api_client, &final_cred).await?;
         }
         Err(e) => {
             error!("Failed to verify credentials: {}", e);
@@ -118,7 +117,11 @@ async fn get_pop3_login(stream: &mut TcpStream) -> AppResult<Credentials> {
     }
 }
 
-async fn handle_pop3_commands(stream: &mut TcpStream) -> AppResult<()> {
+async fn handle_pop3_commands(
+    stream: &mut TcpStream,
+    api_client: &Box<dyn api::SocialNetworkApi>,
+    cred: &Credentials,
+) -> AppResult<()> {
     let mut buf = vec![0u8; 1024];
 
     loop {
@@ -133,10 +136,35 @@ async fn handle_pop3_commands(stream: &mut TcpStream) -> AppResult<()> {
 
         match parts.next() {
             Some("STAT") => {
-                stream.write_all(b"+OK 0 0\r\n").await?;
+                // АСИНХРОННО получаем timeline
+                match api_client.get_timeline(cred, 20, "").await {
+                    Ok(posts) => {
+                        let count = posts.len();
+                        let response = format!("+OK {} 0\r\n", count);
+                        stream.write_all(response.as_bytes()).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to get timeline: {}", e);
+                        stream.write_all(b"-ERR Failed to fetch messages\r\n").await?;
+                    }
+                }
             }
             Some("LIST") => {
-                stream.write_all(b"+OK\r\n.\r\n").await?;
+                // АСИНХРОННО получаем timeline для списка
+                match api_client.get_timeline(cred, 20, "").await {
+                    Ok(posts) => {
+                        stream.write_all(b"+OK\r\n").await?;
+                        for (idx, _post) in posts.iter().enumerate() {
+                            let line = format!("{} 1000\r\n", idx + 1);
+                            stream.write_all(line.as_bytes()).await?;
+                        }
+                        stream.write_all(b".\r\n").await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to get timeline: {}", e);
+                        stream.write_all(b"-ERR Failed to list messages\r\n").await?;
+                    }
+                }
             }
             Some("QUIT") => {
                 stream.write_all(b"+OK bye\r\n").await?;
