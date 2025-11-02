@@ -168,9 +168,9 @@ async fn convert_mastodon_post_to_email(
     let mut message = MessageBuilder::new()
         .from((
             post.account.display_name.clone(),
-            format!("{}@{}", post.account.username, account_addr),
+            format!("{:#?}", post.account),
         ))
-        .to(format!("{}@{}", post.account.username, account_addr))
+        .to(format!("{}", &account_addr))
         .subject(subject)
         .date(created_at)
         .message_id(format!("{}@{}", post.id, account_addr));
