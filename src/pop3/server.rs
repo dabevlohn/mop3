@@ -136,8 +136,20 @@ async fn convert_mastodon_post_to_email(
     account_addr: &str,
     config: &Arc<Config>,
 ) -> AppResult<String> {
-    // Получаем контент
-    let mut content = post.content.clone();
+    let subject: String;
+    let attachments: Vec<serde_json::Value>;
+    let mut content: String;
+
+    // Определяем тему письма
+    if let Some(reblog) = &post.reblog {
+        subject = format!("mop3 Boost from {}", post.account.display_name);
+        content = reblog.content.to_string();
+        attachments = reblog.media_attachments.clone();
+    } else {
+        subject = format!("mop3 Post");
+        content = post.content.clone();
+        attachments = post.media_attachments.clone();
+    };
 
     // Удаляем HTML теги если нужно конвертировать в текст
     if !config.html {
@@ -153,13 +165,6 @@ async fn convert_mastodon_post_to_email(
     if let Some(proxy) = &config.proxy {
         content = apply_proxy_to_links(&content, proxy);
     }
-
-    // Определяем тему письма
-    let subject = if post.reblog.is_some() {
-        format!("mop3 Boost from {}", post.account.display_name)
-    } else {
-        "mop3 Post".to_string()
-    };
 
     // Парсим дату
     let created_at = parse_timestamp(&post.created_at);
@@ -185,15 +190,27 @@ async fn convert_mastodon_post_to_email(
     }
 
     // Обрабатываем медиа вложения
-    for attachment in &post.media_attachments {
-        let url = attachment.get("url").and_then(|v| v.as_str());
-        let preview_url = attachment.get("preview_url").and_then(|v| v.as_str());
+    for attachment in attachments {
+        let url = attachment
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no_url")
+            .to_string();
+        let preview_url = attachment
+            .get("preview_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no_url")
+            .to_string();
 
-        if let Some(preview_url) = preview_url {
+        if preview_url != "no_url" {
             // Загружаем медиа
             if config.attachment || config.inline {
-                if let Ok((data, mime)) = download_media(preview_url).await {
-                    let filename = preview_url.split('/').next_back().unwrap_or("image.jpg");
+                if let Ok((data, mime)) = download_media(&preview_url).await {
+                    let filename = preview_url
+                        .split('/')
+                        .next_back()
+                        .unwrap_or("image.jpg")
+                        .to_string();
                     if config.attachment {
                         message = message.binary_attachment(mime, filename, data);
                     } else if config.inline {
@@ -202,7 +219,7 @@ async fn convert_mastodon_post_to_email(
                 }
             }
             // Добавляем ссылку на оригинальный аттачмент
-            if let Some(url) = url {
+            if url != "no_url" {
                 message = message.text_body(format!("{}\n> Fullsize: {}\n", content, url));
             }
         }
@@ -253,6 +270,7 @@ fn html_to_text(html: &str) -> String {
         .replace("<br />", "\n")
         .replace("<p>", "")
         .replace("https://", "\nhttps://")
+        .replace("#", " #")
         .replace("</p>", "\n")
 }
 
