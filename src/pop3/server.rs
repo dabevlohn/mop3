@@ -179,13 +179,6 @@ async fn convert_mastodon_post_to_email(
         message = message.text_body(&content);
     }
 
-    // Добавляем ссылку на оригинальный пост если нужно
-    //if config.url {
-    //    let url_text = format!("\n\n---\nOriginal: {}", post.url);
-    //    // Добавляем в подпись
-    //    message = message.text_body(format!("{}{}", content, url_text));
-    //}
-
     // Добавляем reply if header если это ответ
     if let Some(reply_id) = &post.in_reply_to_id {
         message = message.in_reply_to(format!("{}@{}", reply_id, account_addr));
@@ -193,30 +186,24 @@ async fn convert_mastodon_post_to_email(
 
     // Обрабатываем медиа вложения
     for attachment in &post.media_attachments {
-        //let url = attachment.get("url").and_then(|v| v.as_str());
+        let url = attachment.get("url").and_then(|v| v.as_str());
         let preview_url = attachment.get("preview_url").and_then(|v| v.as_str());
 
-        if let Some(url) = preview_url {
+        if let Some(preview_url) = preview_url {
             // Загружаем медиа
             if config.attachment || config.inline {
-                if let Ok((data, mime)) = download_media(url).await {
-                    //                    let media_type = attachment
-                    //                        .get("type")
-                    //                        .and_then(|v| v.as_str())
-                    //                        .unwrap_or("image/jpeg");
-                    //
-                    let filename = url.split('/').last().unwrap_or("image.jpg");
-                    //let filename = attachment
-                    //    .get("description")
-                    //    .and_then(|v| v.as_str())
-                    //    .unwrap_or("image.jpg");
-
+                if let Ok((data, mime)) = download_media(preview_url).await {
+                    let filename = preview_url.split('/').next_back().unwrap_or("image.jpg");
                     if config.attachment {
                         message = message.binary_attachment(mime, filename, data);
                     } else if config.inline {
                         message = message.binary_inline(mime, filename, data);
                     }
                 }
+            }
+            // Добавляем ссылку на оригинальный аттачмент
+            if let Some(url) = url {
+                message = message.text_body(format!("{}\n> Fullsize: {}\n", content, url));
             }
         }
     }
