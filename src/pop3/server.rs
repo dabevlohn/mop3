@@ -218,10 +218,10 @@ async fn convert_mastodon_post_to_email(
                     }
                 }
             }
-            // Добавляем ссылку на оригинальный аттачмент
-            if url != "no_url" {
-                message = message.text_body(format!("{}\n> Fullsize: {}\n", content, url));
-            }
+        }
+        // Добавляем ссылку на оригинальный аттачмент
+        if url != "no_url" {
+            message = message.text_body(format!("{}\n> Fullsize: {}\n", content, url));
         }
     }
 
@@ -234,12 +234,12 @@ async fn convert_mastodon_post_to_email(
 }
 
 /// Загружает медиа файл по URL
-async fn download_media(url: &str) -> Result<(Vec<u8>, String), reqwest::Error> {
+async fn download_media(url: &str) -> AppResult<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        error!("Failed to download media: {}", &response.status());
+        return Err(format!("Failed to download media: {}", &response.status()).into());
     }
 
     let mime = response
