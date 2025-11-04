@@ -177,34 +177,27 @@ async fn convert_mastodon_post_to_email(
         .date(created_at)
         .message_id(format!("{}@{}", post.id, account_addr));
 
-    // Добавляем тело
-    if config.html {
-        message = message.html_body(&content);
-    } else {
-        message = message.text_body(&content);
-    }
-
     // Добавляем reply if header если это ответ
     if let Some(reply_id) = &post.in_reply_to_id {
         message = message.in_reply_to(format!("{}@{}", reply_id, account_addr));
     }
 
     // Обрабатываем медиа вложения
-    for attachment in attachments {
-        let url = attachment
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("no_url")
-            .to_string();
-        let preview_url = attachment
-            .get("preview_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("no_url")
-            .to_string();
+    if config.attachment || config.inline {
+        for attachment in attachments {
+            let url = attachment
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("no_url")
+                .to_string();
+            let preview_url = attachment
+                .get("preview_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("no_url")
+                .to_string();
 
-        if preview_url != "no_url" {
-            // Загружаем медиа
-            if config.attachment || config.inline {
+            if preview_url != "no_url" {
+                // Загружаем медиа
                 if let Ok((data, mime)) = download_media(&preview_url).await {
                     let filename = preview_url
                         .split('/')
@@ -218,11 +211,18 @@ async fn convert_mastodon_post_to_email(
                     }
                 }
             }
+            // Добавляем ссылку на оригинальный аттачмент
+            if url != "no_url" {
+                content = format!("{}\n> Fullsize: {}\n", content, url);
+            }
         }
-        // Добавляем ссылку на оригинальный аттачмент
-        if url != "no_url" {
-            message = message.text_body(format!("{}\n> Fullsize: {}\n", content, url));
-        }
+    }
+
+    // Добавляем тело
+    if config.html {
+        message = message.html_body(&content);
+    } else {
+        message = message.text_body(&content);
     }
 
     // Сериализуем в RFC822
