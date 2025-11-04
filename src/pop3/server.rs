@@ -252,6 +252,7 @@ fn html_to_text(html: &str) -> String {
         .replace("<br/>", "\n")
         .replace("<br />", "\n")
         .replace("<p>", "")
+        .replace("https://", "\nhttps://")
         .replace("</p>", "\n")
 }
 
