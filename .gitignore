@@ -12,3 +12,4 @@ Cargo.lock
 /.cargo/config.toml
 .vscode/
 *.pcap*
+*.zip
