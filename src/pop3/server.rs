@@ -193,26 +193,28 @@ async fn convert_mastodon_post_to_email(
 
     // Обрабатываем медиа вложения
     for attachment in &post.media_attachments {
-        let url = attachment.get("url").and_then(|v| v.as_str());
+        //let url = attachment.get("url").and_then(|v| v.as_str());
+        let preview_url = attachment.get("preview_url").and_then(|v| v.as_str());
 
-        if let Some(url) = url {
+        if let Some(url) = preview_url {
             // Загружаем медиа
             if config.attachment || config.inline {
-                if let Ok(data) = download_media(url).await {
-                    let media_type = attachment
-                        .get("Content-Type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("image/jpeg");
-
-                    let filename = attachment
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("image.jpg");
+                if let Ok((data, mime)) = download_media(url).await {
+                    //                    let media_type = attachment
+                    //                        .get("type")
+                    //                        .and_then(|v| v.as_str())
+                    //                        .unwrap_or("image/jpeg");
+                    //
+                    let filename = url.split('/').last().unwrap_or("image.jpg");
+                    //let filename = attachment
+                    //    .get("description")
+                    //    .and_then(|v| v.as_str())
+                    //    .unwrap_or("image.jpg");
 
                     if config.attachment {
-                        message = message.binary_attachment(media_type, filename, data);
+                        message = message.binary_attachment(mime, filename, data);
                     } else if config.inline {
-                        message = message.binary_inline(media_type, filename, data);
+                        message = message.binary_inline(mime, filename, data);
                     }
                 }
             }
@@ -228,16 +230,22 @@ async fn convert_mastodon_post_to_email(
 }
 
 /// Загружает медиа файл по URL
-async fn download_media(url: &str) -> AppResult<Vec<u8>> {
+async fn download_media(url: &str) -> Result<(Vec<u8>, String), reqwest::Error> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to download media: {}", response.status()).into());
+        error!("Failed to download media: {}", &response.status());
     }
 
+    let mime = response
+        .headers()
+        .get("Content-Type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
     let data = response.bytes().await?;
-    Ok(data.to_vec())
+    Ok((data.to_vec(), mime))
 }
 
 /// Конвертирует HTML в обычный текст
