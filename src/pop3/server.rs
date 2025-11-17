@@ -164,6 +164,8 @@ async fn convert_mastodon_post_to_email(
     // Применяем proxy для ссылок если нужно
     if let Some(proxy) = &config.proxy {
         content = apply_proxy_to_links(&content, proxy);
+    } else {
+        content = apply_proxy_to_links(&content, "");
     }
 
     // Парсим дату
@@ -281,7 +283,7 @@ fn apply_proxy_to_links(content: &str, proxy: &str) -> String {
         Ok(re) => re
             .replace_all(content, |caps: &fancy_regex::Captures| {
                 let url = &caps[0];
-                format!("{}{}", proxy, url)
+                format!("{}{}\n", proxy, url)
             })
             .to_string(),
         Err(_) => content.to_string(),
